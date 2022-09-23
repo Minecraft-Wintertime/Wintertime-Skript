@@ -1,0 +1,191 @@
+# Dropper skript
+# Special for Minecraft Wintertime
+
+options:
+	team_number : 8
+	gametime : 30 seconds
+
+	sql_ip : "127.0.0.1:5432"
+	sql_db : "minecraft"
+	sql_username : "dropper"
+	sql_password : "dropperpass"
+
+on load:
+	delete {sql}
+	set {sql} to the database "postgresql://%{@sql_ip}%/%{@sql_db}%?user=%{@sql_username}%&password=%{@sql_password}%&useSSL=false"
+	execute "CREATE TABLE IF NOT EXISTS dropper_maps (id SERIAL PRIMARY KEY, world VARCHAR NOT NULL, drop_id INT NOT NULL, x_spawn INT NOT NULL, y_spawn INT NOT NULL, z_spawn INT NOT NULL, x_exit FLOAT NOT NULL, y_exit FLOAT NOT NULL, z_exit FLOAT NOT NULL, UNIQUE (world, drop_id));" in {sql}
+	execute "CREATE TABLE IF NOT EXISTS dropper_time (id SERIAL PRIMARY KEY, world VARCHAR NOT NULL, session INT NOT NULL, drop_id INT NOT NULL, player VARCHAR NOT NULL, time INTERVAL NOT NULL, UNIQUE(world, session, drop_id, player));" in {sql}	
+	if {stage} is not set:
+		set {stage} to "pregame"
+
+
+on join:
+	set the maximum health of the player to 1
+	{stage} is "game"
+	player has permission "dropper.player"
+	set {_id} to size of {dropper_player_timer::%player%::*} # НАЙТИ УРОВЕНЬ ИГРОКА
+	if {_id} is 0:
+		# Игрок зашел после начала игры
+		set {dropper_player_timer::%player%::0} to {game_startime}
+		set {_id} to size of {dropper_player_timer::%player%::*}
+	teleport the player to {dropper_spawns::%{_id}%}
+	
+
+on respawn:
+	{stage} is "game"
+	player has permission "dropper.player"
+	set {_id} to size of {dropper_player_timer::%player%::*}
+	set respawn location to {dropper_spawns::%{_id}%}
+
+
+on world spawn change:
+	setup_world(event-world)
+
+
+on rightclick on button:
+	set {_time} to now
+	{stage} is "game"
+	player has permission "dropper.player"
+	set {_id} to check_button(event-location)
+	{_id} is not 0
+	level_complete_handler(world "drop", {_id}, player, {_time})
+
+
+every 1 tick:
+	{stage} is "game"
+	now > {game_stoptime}:
+		stop_game()
+
+
+command /updatedropper [<world>]:
+	permission: dropper.admin
+	trigger:
+		if arg-1 is set:
+			set {_w} to arg-1
+		else:
+			if command sender is console:
+				set {_w} to random world of all worlds
+			else:
+				set {_w} to player's world
+		update_droppers({_w})
+		send "%{_w}% updated!" to command sender
+
+
+command /start:
+	permission: dropper.admin
+	trigger:
+		start_game()
+
+
+function check_button(loc:location) :: number:
+# Возвращает id дроппера в котором находится кнопка,
+#	если дроппер не найден возвращает 0
+	set {_id} to 0
+	loop {dropper_exits::*}:
+		"%loop-value%" is "%{_loc}%"
+		set {_id} to loop-index parsed as number
+		stop loop
+	return {_id}
+
+
+function level_complete_handler(w:world, id:number, p:player, time:date):
+# Обработчик события прохождения уровня id игроком p
+	set {dropper_player_timer::%{_p}%::%{_id}%} to {_time}
+	set {_timer_raw} to difference between {_time} and {dropper_player_timer::%{_p}%::%{_id} - 1%}
+	set {_timer_level} to ({_timer_raw} from (unix date of 0)) formatted as "mm:ss.S"
+	if {_id} is not {last_dropper}:
+		#Переход на следующий уровень
+		teleport {_p} to {dropper_spawns::%{_id}+1%}
+		send "&aУровень %{_id}% пройден за %{_timer_level}%" to {_p}
+	
+	else:
+		#Последний уровень пройден
+		send "&aПоследний уровень пройден за %{_timer_level}%!" to {_p}
+		set {_timer_raw} to difference between {_time} and {dropper_player_timer::%{_p}%::0}
+		set {_timer_total} to ({_timer_raw} from (unix date of 0)) formatted as "mm:ss.S"
+		send "&aТвое общее время: %{_timer_total}%" to {_p}
+
+	# Запись времени в SQL
+	set {_sql_command} to "INSERT INTO dropper_time VALUES (default, '%{_w}%', %{session}%, %{_id}%, '%{_p}%', '%{_timer_level}%');"
+	if the last sql error is set:
+		broadcast the last sql error
+	#INSERT INTO dropper_time VALUES (default, 'drop', 1, 1, '123223', '0:00:01.111');
+	execute unsafe {_sql_command} in {sql}
+
+
+function start_game():
+	delete {dropper_player_timer::*}
+	set {session} to {session}+1
+	set {game_startime} to now
+	set {game_stoptime} to {@gametime} from now
+	set {stage} to "game"
+	loop all players:
+		loop-player has permission "dropper.player"
+		set {dropper_player_timer::%loop-player%::0} to {game_startime}
+		teleport loop-player to {dropper_spawns::1}
+		#send "%{dropper_player_timer::%loop-player%::0}%" to loop-player
+	broadcast "Game started"
+
+
+function stop_game():
+	set {stage} to "postgame"
+	loop all players:
+		loop-player has permission "dropper.player"
+		teleport loop-player to spawn of world "drop"
+	broadcast "Game end"
+
+
+function reset_game():
+	set {stage} to "pregame"
+	broadcast "Game reset"
+
+
+function setup_world(w:world):
+# Установка настроек мира
+	disable PVP in {_w}
+	set the gamerule doDaylightCycle of {_w} to false
+	set the gamerule doImmediateRespawn of {_w} to true 
+	set the gamerule doWeatherCycle of {_w} to false
+	set the gamerule announceAdvancements of {_w} to false
+	set the gamerule doEntityDrops of {_w} to false
+	set the gamerule doFireTick of {_w} to false
+	set the gamerule doInsomnia of {_w} to false
+	set the gamerule doLimitedCrafting of {_w} to true
+	set the gamerule doMobLoot of {_w} to false
+	set the gamerule doMobSpawning of {_w} to false
+	set the gamerule doPatrolSpawning of {_w} to false
+	set the gamerule doTileDrops of {_w} to false
+	set the gamerule doTraderSpawning of {_w} to false
+	set the gamerule fallDamage of {_w} to true
+	set the gamerule fireDamage of {_w} to true
+	set the gamerule freezeDamage of {_w} to false
+	set the gamerule keepInventory of {_w} to true
+	set the gamerule mobGriefing of {_w} to false
+	set the gamerule randomTickSpeed of {_w} to 0
+	set the gamerule showDeathMessages of {_w} to false
+	set the gamerule spawnRadius of {_w} to 1
+	set time of {_w} to 22:00
+	set weather of {_w} to clear
+
+
+function update_droppers(w:world):
+# Обновляет списки дропперов
+	set {last_dropper} to 0
+	delete {droppers::*}
+	delete {dropper_exits::*}
+	delete {dropper_spawns::*}
+	set {_sql_command} to "SELECT * FROM dropper_maps WHERE world = '%{_w}%';"
+	execute unsafe {_sql_command} in {sql} and store the result in {droppers::*}
+	loop {droppers::drop_id::*}:
+		set {_x_spawn} to {droppers::x_spawn::%loop-index%}
+		set {_y_spawn} to {droppers::y_spawn::%loop-index%}
+		set {_z_spawn} to {droppers::z_spawn::%loop-index%}
+		set {_x_exit} to {droppers::x_exit::%loop-index%}
+		set {_y_exit} to {droppers::y_exit::%loop-index%}
+		set {_z_exit} to {droppers::z_exit::%loop-index%}
+		set {_spawn} to location at {_x_spawn}, {_y_spawn}, {_z_spawn} in {_w}
+		set {_exit} to location at {_x_exit}, {_y_exit}, {_z_exit} in {_w}
+		set {dropper_exits::%loop-value%} to {_exit}
+		set {dropper_spawns::%loop-value%} to {_spawn}
+		{last_dropper} < loop-value
+		set {last_dropper} to loop-value

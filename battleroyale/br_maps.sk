@@ -1,0 +1,101 @@
+import:
+	org.bukkit.Bukkit
+	org.bukkit.map.MapView
+	
+
+
+
+
+command /clearmaps:
+	trigger:
+		br_maps_clear(player's world)
+
+
+function br_maps_clear(w:world):
+	loop all players:
+		remove all filled map from loop-player's inventory
+	delete all dropped filled map in {_w}
+		
+
+
+function br_maps_generate(w:world, team_number: number):
+	# Создает MapView карт в количестве (количество зон x количество команд)
+	delete {map_views::*}
+	delete {map_markers::*}
+	loop {zonelist::diameter::*}:
+		loop-index is not "%size of {zonelist::diameter::*}%"
+		
+
+		set {_diameter} to loop-value
+		set {_diameter_next} to {zonelist::diameter::%loop-index parsed as number + 1%}
+		set {_x} to {zonelist::center::x::%loop-index%}
+		set {_z} to {zonelist::center::z::%loop-index%}
+		set {_x_next} to {zonelist::center::x::%loop-index parsed as number + 1%}
+		set {_z_next} to {zonelist::center::z::%loop-index parsed as number + 1%}
+		set {_scale} to br_get_map_scale({_diameter})
+		set {_map_markers} to br_get_map_marker({_diameter}, {_diameter_next}, {_x}, {_z}, {_x_next}, {_z_next})
+		add {_map_markers} to {map_markers::*}
+		loop {_team_number} times:
+			set {_map_view} to Bukkit.createMap({_w})	
+			{_map_view}.setCenterX({_x})
+			{_map_view}.setCenterZ({_z})
+			{_map_view}.setTrackingPosition(true)
+			{_map_view}.setScale({_scale})	
+			add {_map_view} to {map_views::%loop-index-1%::*}
+
+
+
+function br_get_map_scale(diameter:number) :: object:
+	if {_diameter} > 1000:
+		return MapView.Scale.FARTHEST
+	else if {_diameter} > 500:
+		return MapView.Scale.FAR
+	else if {_diameter} > 250:
+		return MapView.Scale.NORMAL
+	else if {_diameter} > 125:
+		return MapView.Scale.CLOSE
+	else:
+		return MapView.Scale.CLOSEST
+
+
+function br_get_map_marker(diameter: number, diameter_next: number, x: number, z: number, x_next: number, z_next: number) :: text:
+	# Добавление меток зон
+	# Происходит в 5 циклов одновременно добавляются по 4 метки (Север-Юг-Запад-Восток) для двух зон
+	# текущая - красная, следующая - зеленая
+	# Возможно использование MapCanvas для задания меток, вместо NBT тегов
+	set {_step_distance} to round({_diameter} / 5)
+	set {_const_coord} to ({_diameter} / 2)
+	set {_step_distance_next} to round({_diameter_next} / 5)
+	set {_const_coord_next} to ({_diameter_next} / 2)
+	loop 5 times:
+		set {_var_coord} to (((loop-value) - 1) * {_step_distance}) - {_const_coord}
+		set {_var_coord_next} to (((loop-value) - 1) * {_step_distance_next}) - {_const_coord_next}
+		# Красные метки
+		add "{type: 2b, rot: 180.0d, id: ""%loop-value%1"", z: %{_z} - {_var_coord}%d, x: %{_x} - {_const_coord}%d}" to {_map::*}
+		add "{type: 2b, rot: 0.0d, id: ""%loop-value%2"", z: %{_z} + {_var_coord}%d, x: %{_x} + {_const_coord}%d}" to {_map::*}
+		add "{type: 2b, rot: 90.0d, id: ""%loop-value%3"", z: %{_z} + {_const_coord}%d, x: %{_x} - {_var_coord}%d}" to {_map::*}
+		add "{type: 2b, rot: 270.0d, id: ""%loop-value%4"", z: %{_z} - {_const_coord}%d, x: %{_x} + {_var_coord}%d}" to {_map::*}
+		# Зеленые метки
+		add "{type: 7b, rot: 0.0d, id: ""%loop-value%5"", z: %{_z_next} - {_var_coord_next}%d, x: %{_x_next} - {_const_coord_next}%d}" to {_map::*}
+		add "{type: 7b, rot: 0.0d, id: ""%loop-value%6"", z: %{_z_next} + {_var_coord_next}%d, x: %{_x_next} + {_const_coord_next}%d}" to {_map::*}
+		add "{type: 7b, rot: 0.0d, id: ""%loop-value%7"", z: %{_z_next} + {_const_coord_next}%d, x: %{_x_next} - {_var_coord_next}%d}" to {_map::*}
+		add "{type: 7b, rot: 0.0d, id: ""%loop-value%8"", z: %{_z_next} - {_const_coord_next}%d, x: %{_x_next} + {_var_coord_next}%d}" to {_map::*}
+	# Создание NBT строки с метками
+	set {_string} to "{Decorations: ["
+	loop {_map::*}:
+		set {_string} to "%{_string}%%loop-value%,"
+	delete {_map::*}
+	set {_string} to "%{_string}%]}"
+	return {_string}
+
+
+function br_maps_give(p:player, zone: number, team:text):
+	{_zone} is not size of {zonelist::diameter::*}
+	set {_map_view} to {map_views::%{_zone}%::%{_team}%}
+	set {_map} to filled map
+	set {_mapItemMeta} to {_map}.getItemMeta()
+	{_mapItemMeta}.setMapView({_map_view})
+	{_mapItemMeta}.setDisplayName("&aЗона %{_zone}%")
+	{_map}.setItemMeta({_mapItemMeta})
+	add {map_markers::%{_zone}%} to nbt of {_map}
+	give {_map} to {_p}

@@ -1,0 +1,47 @@
+import:
+	org.bukkit.Bukkit
+
+#> Reset worldborder size
+#> @param w world
+function br_worldborder_clear(w:world):
+	set {_border} to {_w}.getWorldBorder()
+	{_border}.setSize(100000)
+
+
+#> Set worldborder size and center dependent of zone
+#> @param stage "stable" or "shrinking" zone 
+#> @param zone number of zone 
+function br_worldborder_set(border: object, stage: text, zone: number):
+	if {_stage} is "stable":
+		{_border}.setSize({zonelist::diameter::%{_zone}%}, 1)
+		{_border}.setCenter({zonelist::center::x::%{_zone}%}, {zonelist::center::z::%{_zone}%})
+		if {_zone} is not 1:
+			set {_current_cooldown_time} to difference between now and {zonelist::endtime::%{_zone} - 1%}
+		else:
+			set {_current_cooldown_time} to difference between now and {gamestarttime}
+		set {_current_cooldown_time} to unix timestamp of ({_current_cooldown_time} from (unix date of 0))
+		set {_cooldown} to unix timestamp of ({zonelist::cooldown::%{_zone}%} from (unix date of 0))
+		set {_progress} to {_current_cooldown_time} / {_cooldown}	
+
+	if {_stage} is "shrinking":
+		if {_zone} is not 1:
+			set {_cooldown_end_time} to {zonelist::endtime::%{_zone} - 1%}
+		else:
+			set {_cooldown_end_time} to {gamestarttime}
+		add {zonelist::cooldown::%{_zone}%} to {_cooldown_end_time}
+		set {_current_shrink_time} to difference between now and {_cooldown_end_time}
+		set {_current_shrink_time} to unix timestamp of ({_current_shrink_time} from (unix date of 0))
+		set {_shrinktime} to unix timestamp of ({zonelist::timeshrinking::%{_zone}%} from (unix date of 0))
+		set {_progress} to {_current_shrink_time} / {_shrinktime}
+
+		set {_deltadiameter} to {zonelist::diameter::%{_zone}%} - {zonelist::diameter::%{_zone} + 1%}
+
+		set {_deltax} to {zonelist::center::x::%{_zone}%} - {zonelist::center::x::%{_zone} + 1%}
+		set {_deltaz} to {zonelist::center::z::%{_zone}%} - {zonelist::center::z::%{_zone} + 1%}
+
+		set {_targetdiameter} to {zonelist::diameter::%{_zone}%} - {_deltadiameter} * {_progress}
+		set {_targetx} to {zonelist::center::x::%{_zone}%} - {_deltax} * {_progress}
+		set {_targetz} to {zonelist::center::z::%{_zone}%} - {_deltaz} * {_progress}
+		{_border}.setSize({_targetdiameter}, 1)
+		{_border}.setCenter({_targetx}, {_targetz})
+	br_bossbar_update({_stage},{_zone},{_progress})

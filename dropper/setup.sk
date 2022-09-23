@@ -1,0 +1,89 @@
+command /setstart:
+	permission: dropper.admin
+	trigger:
+		set {dropper_start} to player's location
+		set {world} to player's world
+		send "Set start %{dropper_start}%" to the player
+
+
+command /setend:
+	permission: dropper.admin
+	trigger:
+		set {dropper_end} to location of target block
+		send "Set end %{dropper_end}%" to the player
+
+
+command /savedropper [<number>]:
+	permission: dropper.admin
+	trigger:		  
+		set {_result} to false
+		set {world} to world "drop" # УБРАТЬ
+		#set {dropper_end} to location at 0.5, 1.5, 2.5 in {world} # УБРАТЬ
+		if arg-1 is not set:
+			request_dropper_id({world})
+			wait 1 tick
+			set {_id} to get_dropper_id()
+		else:
+			set {_id} to floor(arg-1)
+		save_dropper({_id}, {dropper_start}, {dropper_end}, {world})
+		wait 1 tick
+		if the last sql error is set:
+			send the last sql error to the player and console
+		else:
+			request_check_save({_id})
+			wait 1 tick
+			set {_result} to check_save({dropper_start}, {dropper_end}, {world})
+		if {_result} is true:
+			send "Dropper %{_id}% saved!" to the player and console
+		else:
+			send "ERROR" to the player and console
+
+
+function request_dropper_id(w: world):
+	set {_sql_command} to "SELECT max(drop_id) FROM dropper_maps WHERE world = '%{_w}%';"
+	execute unsafe {_sql_command} in {sql} and store the result in {request_output::*}
+	set {_dummy} to "just wasting time"
+
+
+function get_dropper_id() :: number:
+	set {_result} to {request_output::max::1} + 1
+	delete {request_output::*}
+	return {_result}
+
+
+function save_dropper(n: number, start: location, end: location, w: world):
+# Запись в таблицу dropper_maps мира и координат точек входа и выхода
+	set {_result} to false
+	set {_xs} to round({_start}'s x-coordinate)
+	set {_ys} to round({_start}'s y-coordinate)
+	set {_zs} to round({_start}'s z-coordinate)
+	set {_xe} to {_end}'s x-coordinate
+	set {_ye} to {_end}'s y-coordinate
+	set {_ze} to {_end}'s z-coordinate
+	set {_sql_command} to "INSERT INTO dropper_maps VALUES (default, '%{_w}%', %{_n}%, %{_xs}%, %{_ys}%, %{_zs}%, %{_xe}%, %{_ye}%, %{_ze}%) ON CONFLICT (world, drop_id) DO UPDATE SET (world, drop_id, x_spawn, y_spawn, z_spawn, x_exit, y_exit, z_exit) = (EXCLUDED.world, EXCLUDED.drop_id, %{_xs}%, %{_ys}%, %{_zs}%, %{_xe}%, %{_ye}%, %{_ze}%);"
+	execute unsafe {_sql_command} in {sql}
+	set {_dummy} to "just wasting time"
+
+
+function request_check_save(n: number):
+# Проверка, вызываемая после save_dropper(), считывает строку по "drop_id"
+	set {_sql_command} to "SELECT * FROM dropper_maps WHERE drop_id = %{_n}%;"
+	execute unsafe {_sql_command} in {sql} and store the result in {request_output::*}
+	set {_dummy} to "just wasting time"
+	
+
+function check_save(start: location, end: location, w: world) :: boolean:
+# Проверка, вызываемая после request_save_dropper(), 
+# 	проверяет соответствие всех координат в таблице аргументам
+	set {_result} to false
+	set {_xs} to round({_start}'s x-coordinate)
+	set {_ys} to round({_start}'s y-coordinate)
+	set {_zs} to round({_start}'s z-coordinate)
+	set {_xe} to {_end}'s x-coordinate
+	set {_ye} to {_end}'s y-coordinate
+	set {_ze} to {_end}'s z-coordinate
+	"%{request_output::x_spawn::1}%%{request_output::y_spawn::1}%%{request_output::z_spawn::1}%" is "%{_xs}%%{_ys}%%{_zs}%"
+	"%{request_output::x_exit::1}%%{request_output::y_exit::1}%%{request_output::z_exit::1}%" is "%{_xe}%%{_ye}%%{_ze}%"
+	delete {request_output::*}
+	set {_result} to true
+	return {_result}

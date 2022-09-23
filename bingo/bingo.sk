@@ -1,0 +1,358 @@
+# TODO:
+#   Определить конечный список предметов для игры
+# 	Убрать из списка инструменты и оружее
+#	Добавить условия окончания игры:
+# 	- одна команда скрафтила все вещи
+# 	✓ - кончилось время
+#	✓ Добавить функцию окончания игры
+#	✓ Добавить конечный автомат с состояниями (игра и не_игра)
+#	✓ Ограничить игроков в перемещении, в ✓ разрушении,
+#		✓ получении урона до начала и ✓ после окончания игры
+#	Добавить оповещения, возможно, звуковые ✓ эффекты о начале,
+#		окончании и в случаях когда предмет скрафтила ваша и
+#		чужая команда отдельно
+#	✓ Подключить к базе данных:
+#		✓ Чтение списка игроков и команд
+#		✓ Запись очков по окончании игры
+#	ПРОВЕРИТЬ Открыть все рецепты в книге рецептов
+#	ПРОВЕРИТЬ Оформить таймер (e.g. с помощью bossbar)
+#		см. bossbar.sk в battleroyale
+#	Добавить обратный отсчет перед началом игры (e.g. с помощью title)
+#	✓ Заменить {gui} на инвентарь, генерирующийся при открытии
+#		Reason: добавление голов в этот инвентарь невозможно,
+#			так как сейчас он один на всех, а должен быть
+#			индивидуальный для каждого из игроков.
+#			Как дополнительная фича: можно уже скрафченные
+#			предметы твоей командой заменять на зеленое стекло,
+#			а которые не успели скрафтить - на красное.
+
+# Фичи:
+#	Добавить телепортацию к тиммейтам с кд (на подобии mcc)
+# - добавить тиммейтов в инвентарь
+#	Заменять в списке предметов предметы за которые уже получены
+#		все награды на красные/серые стеклянные панели
+#	Обрабатывать on join для "опоздавших" к началу игроков
+
+#	https://github.com/ShaneBeee/Sk-Perm
+#	Аддон может использоваться для присвоения/сброса 
+#	флага bingo.player
+
+#	https://github.com/ShaneBeee/SkBee
+#	Для отображения таблиц очков, например для вывода таймера
+#	или дополнительной информации
+#	ДАННЫЙ АДДОН НЕ ПОДХОДИТ ПОТОМУ ЧТО ДЛЯ ОТОБРАЖЕНИЯ
+#	ТАБЛИЦ ОЧКОВ ОН ИСПОЛЬЗУЕТ КОМАНДЫ, ЧТО ПОЛНОСТЬЮ
+#	ДЕЛАЕТ ИХ НЕ РАБОТОСПОСОБНЫМИ
+
+import:
+	org.bukkit.Bukkit
+	org.bukkit.boss.BarColor
+	org.bukkit.boss.BarStyle
+
+options:
+	team_number : 8
+	number_of_bingo_items: 16
+	round_time : 3 seconds
+	spawn_area_radius : 5
+
+	sql_ip : "127.0.0.1:5432"
+	sql_db : "minecraft"
+	sql_username : "bingo"
+	sql_password : "bingopass"
+
+
+on load:
+	# sql addon: https://git.limework.net/Limework/skript-db +
+	# inserted Driver https://jdbc.postgresql.org/ +
+	# config: sql-driver-class-name: "org.postgresql.Driver"
+	set {sql} to the database "postgresql://%{@sql_ip}%/%{@sql_db}%?user=%{@sql_username}%&password=%{@sql_password}%&useSSL=false"
+	execute "CREATE TABLE IF NOT EXISTS bingo_items (item VARCHAR PRIMARY KEY);" in {sql}
+	execute "CREATE TABLE IF NOT EXISTS bingo (username VARCHAR PRIMARY KEY);" in {sql}
+
+	set all players' tab list header to "Bingo"
+	execute "SELECT * FROM bingo_items;" in {sql} and store the result in {_output::*}
+	wait 1 tick
+	set {item_list::*} to {_output::item::*}
+	set {bingo_prize::*} to set_bingo_prize()
+
+	set {_team_colors::*} to get_teamcolors()
+	set {_scoreboard} to get_scoreboard()
+	set_teams({_scoreboard}, {@team_number},{_team_colors::*})
+	bingo_bossbar_clear()
+	bingo_bossbar_generate()
+
+on world spawn change:
+	set {_world} to event-world
+	set the gamerule keepInventory of {_world} to true
+	set the gamerule doDaylightCycle of {_world} to false
+	set time of {_world} to 10:00
+	set the gamerule doImmediateRespawn of {_world} to true 
+	set the gamerule doWeatherCycle of {_world} to false
+	set weather of {_world} to clear	
+	set {bingo_state} to "pregame"
+	
+
+every tick:
+	{bingo_state} is "pregame"
+	# телепортация игрока при выходе из зоны спавна
+	loop all players:
+		loop-player has permission "bingo.player"
+		distance between loop-player and spawn point of loop-player's world > {@spawn_area_radius}
+		teleport the loop-player to spawn point of loop-player's world
+		play sound "entity.enderman.teleport" to the loop-player
+
+
+every 1 second:
+	{bingo_state} is "game"
+	game_tick_handler()
+		
+		
+on join:
+	bingo_bossbar_add_player(player)
+	player has permission "bingo.player":
+		{bingo_score::*} doesn't contain player
+		add_player_to_game(player)
+	else:
+		set_spectator(player)
+	command "/recipe give @a *"
+	
+on respawn:
+	wait 1 tick # on respawn срабатывает ДО появления игрока в мире
+	
+	apply saturation without particles to event-player for 1 day
+	apply speed 2 without particles to event-player for 1 day
+	apply haste 2 without particles to event-player for 1 day
+
+
+on drop of nether star:
+	cancel event
+	
+
+on drop:	
+	if {bingo_state} is not "game":
+		cancel event
+	if name of event-item is "<purple>Кирка" or "<purple>Топор" or "<purple>Лопата" or "<purple>Меч":
+		cancel event
+	
+
+on rightclick holding a nether star:
+	open_gui(player)
+	
+
+on craft:
+	if {bingo_state} is "game":
+		check_item(event-items, player)
+	else:
+		cancel event		
+	
+	
+on inventory click:
+	# Нужно ли обрабатывать check_item() здесь?
+	if name of event-inventory is "Список предметов":
+		cancel event
+		event-itemtype is player head
+		send "This is %event-string%"	
+	else:
+		if event-itemtype is nether star:
+			cancel event
+			wait 1 tick
+			open_gui(player)
+		# check_item(event-items, player)
+
+
+on place:
+	{bingo_state} is not "game"
+	cancel event
+		
+
+on break:
+	{bingo_state} is not "game"
+	cancel event
+
+
+on experience spawn:
+	cancel event
+
+
+on damage of player:
+	{bingo_state} is not "game"
+	push the attacker upwards at speed 0.2
+	push the attacker backwards at speed 0.2
+	cancel event
+
+
+command /timenow:
+	trigger:
+		set {nowtime} to now
+		send "{nowtime} is %{nowtime} formatted as "HH:mm:ss"%" to the player
+		
+		
+command /start:
+	permission: bingo.start
+	trigger:
+		#clear then update comand::players list from database
+		if {bingo_state} is "game":
+			send "Ошибся, братулек. Игра уже идет"
+		else:				
+			start_game()
+			set {_test} to "%{bingo_items::*}%"
+			send "Сгенерировано %size of {bingo_items::*}% предметов: %{_test}.replace(" and "," и ")%"
+
+#> Handler 
+function game_tick_handler():
+	set {_raw_timer} to (difference between {stop_time} and now) from (unix date of 0)
+	set {timer} to {_raw_timer} formatted as "mm:ss"
+	set all players' tab list header to "Bingo %{timer}%"
+	# send "timer is %{timer}%" to all players and console # вывод таймера
+	set {_progress} to 1
+	bingo_bossbar_update({_progress})
+	# проверка окончания таймера
+	now > {stop_time}
+	game_end_handler()
+
+#> Handler of start of game event
+function start_game():
+	set {bingo_state} to "game"
+	set {stop_time} to {@round_time} from now
+	delete {bingo_score::*}
+	delete {bingo_items::*}	# чистим предыдущий список предметов
+	set {bingo_items::*} to generate_items({item_list::*}) # генерируем список предметов
+	loop all players:
+		loop-player has permission "bingo.player"
+		add_player_to_game(loop-player)
+		play sound "entity.ender_dragon.growl" to loop-player 
+
+#> Handler of end of game event
+function game_end_handler():
+	broadcast "Game over"
+	set {bingo_state} to "postgame"
+	play sound "ui.toast.challenge_complete" to all players
+	send_results_to_sql("%{starttime}%")
+
+#> Save points of this session to SQL Database
+#> @param coloumn name of coloumn in SQL table
+function send_results_to_sql(coloumn:text):
+	execute unsafe "ALTER TABLE bingo ADD COLUMN ""%{_coloumn}%"" INTEGER DEFAULT 0;" in {sql}
+	loop {bingo_score::*}:
+		add "('%loop-index%', %loop-value%)" to {_str::*}
+	set {_results} to join {_str::*} with ", "
+	execute unsafe "INSERT INTO bingo (username, ""%{_coloumn}%"") VALUES %{_results}% ON CONFLICT (username) DO UPDATE SET ""%{_coloumn}%""=EXCLUDED.""%{_coloumn}%"";" in {sql}
+
+#> Return list of items that are playing it this session
+#> @param list list of all items that can be in the game
+function generate_items(list: objects) :: objects:
+	set {_shuffled_items::*} to shuffled {_list::*} # перемешиваем список названий предметов
+	loop {_shuffled_items::*}:
+		set {_t} to loop-value
+		set {_i} to {_t} parsed as item
+		{_i} is set	#проверка на пидора
+		set {_i} to 1 of {_i} 
+		add {_i} to {_checked_items::*}
+	loop {@number_of_bingo_items} times:	# берем необходимое количество  предметов 
+		add {_checked_items::%loop-value%} to {_generated_items::*} #парсим названия предметов как предметы и добавляем их в список
+	return {_generated_items::*}
+	
+#> Check if the item is from the list and award points to player if it is
+#> @param i item
+#> @param p player
+function check_item(i : item, p : player):
+	set {_i} to 1 of {_i}
+	{bingo_items::*} contain {_i}
+	set {_teammates::*} to get_teammates({_p})
+	{bingo_items::%{_i}%::*} doesn't contain {_teammates::*}
+	size of {bingo_items::%{_i}%::*} < size of {bingo_prize::*}
+	
+	add {_p} to {bingo_items::%{_i}%::*} # добавляем игрока, если он получил предмет из списка
+	set {_pioner_queue} to size of {bingo_items::%{_i}%::*} # берем количество человек, получивших предмет
+	add {bingo_prize::%{_pioner_queue}%} to {bingo_score::%{_p}%} # добавляем столько очков из bingo_prize игроку, каким по счету он получил предмет
+
+	send "Ваше очко %{bingo_score::%{_p}%}%" to {_p}
+	loop all players:
+		loop-player has permission "bingo.player"
+		{_teammates::*} contains loop-player:
+			play sound "entity.experience_orb.pickup" to loop-player
+		else:
+			play sound "entity.experience_orb.pickup" to loop-player
+
+#> Add player to players list and give him tools
+#> @param p player
+function add_player_to_game(p : player):
+	add {_p} to {bingo_score::*}
+	set {_p}'s gamemode to survival
+	clear {_p}'s inventory
+	give unbreakable iron pickaxe named "<purple>Кирка" to {_p}
+	give unbreakable iron axe named "<purple>Топор" to {_p} 
+	give unbreakable iron shovel named "<purple>Лопата" to {_p}
+	give unbreakable iron sword named "<purple>Меч" to {_p}
+	set slot 8 of {_p} to nether star named "&cСписок предметов"
+	loop {@team_number} times:
+		{_p} has permission "group.team%loop-value%"
+		set {_team_name} to "team%loop-value%"
+		add_player_to_team({_p}, {_team_name})
+
+#> Remove the player from players and make him a spectator
+#> @param p player
+function set_spectator(p:player):
+	clear {_p}'s inventory
+	remove {_p} from {bingo_score::*}
+	set {_p}'s gamemode to spectator
+
+#> Generate and open GUI to player
+#> @param p player
+function open_gui(p : player):
+	set {_gui} to a new chest inventory with 4 row with name "Список предметов"
+	loop {bingo_items::*}:	# берем необходимое количество  предметов 
+		set {_slot_num} to mod(loop-index parsed as number -1, 4) + floor((loop-index parsed as number -1) / 4) * 9
+		set {_pioner_queue} to 1 + size of {bingo_items::%loop-value%::*}
+		set slot {_slot_num} of {_gui} to {bingo_prize::%{_pioner_queue}%} of loop-value #%
+	set {_teammates::*} to get_teammates({_p})
+
+	loop {_teammates::*}:
+		loop-value is not {_p}
+		set {_slot_num} to 13+(10)*floor(loop-value/4)+mod(loop-value, 4)
+		set slot {_slot_num} of {_gui} to 1 of head of loop-value
+	open {_gui} to {_p}
+
+
+#> Return list of scores that players received as prize
+function set_bingo_prize() :: numbers:
+	loop 4 times:
+		add 10 * (5 - loop-value) to {_bingo_prize::*}
+	return {_bingo_prize::*}
+
+#> Remove all bossbars
+function bingo_bossbar_clear():
+	{bingo_bossbar}.setVisible(false)
+	{bingo_bossbar}.removeAll()
+	delete {bingo_bossbar}
+
+#> Generating bossbars for bingo
+function bingo_bossbar_generate():
+	set {bingo_bossbar} to createBossBar("Таймер", "red", 0)
+	loop all players:
+		bingo_bossbar_add_player(loop-player)
+
+#> Add bossbar to player
+#> @param p player
+function bingo_bossbar_add_player(p:player):
+	{bingo_bossbar}.addPlayer({_p})
+		
+#> Update progress of bossbar
+#> @param progress number between 0 and 1
+function bingo_bossbar_update(progress:number):
+	{bingo_bossbar}.setVisible(true)
+	{bingo_bossbar}.setProgress({_progress})
+	
+#> Return new bossbar
+#> @param title title above bossbar
+#> @param color BLUE, GREEN, PINK, PURPLE, RED, WHITE or YELLOW
+#> @param progress number between 0 and 1
+#> @param style SOLID, SEGMENTED_6, SEGMENTED_10, SEGMENTED_12, SEGMENTED_20
+function createBossBar(title: text, color: text = "purple", progress: number = 0, style: text = "solid") :: object:
+	set {_bar-color} to BarColor.valueOf({_color} in upper case)
+	set {_bar-style} to BarStyle.valueOf({_style} in upper case)
+	set {_args::*} to {_title}, {_bar-color} and {_bar-style}
+	set {_bossbar} to Bukkit.createBossBar({_args::*})
+	{_bossbar}.setVisible(false)
+	{_bossbar}.setProgress({_progress})
+	return {_bossbar}

@@ -1,0 +1,379 @@
+# Battleroyale skript
+# Special for 2022 Winter Bootcamp Event
+#
+#	TODO:
+#		Таймер, обратный отсчет
+#		Стартовая платформа
+#		
+
+#	Dependencies:
+#		skript-reflect
+#		SkBee
+#		skript-db
+#		
+#
+#	Modules:
+#		br_zone
+#		br_bossbar
+#		br_maps
+#		br_worldborder
+
+
+import:
+	org.bukkit.Bukkit
+	org.bukkit.ChatColor
+
+options:
+	team_number : 8
+	kill_points : 10
+	first_map_giveaway_time : 10 seconds
+
+	sql_ip : "127.0.0.1:5432"
+	sql_db : "minecraft"
+	sql_username : "battleroyale"
+	sql_password : "battleroyalepass"
+
+variables:
+	{br_damage::%player%::%player%} = 0
+
+on load:
+	set {sql} to the database "postgresql://%{@sql_ip}%/%{@sql_db}%?user=%{@sql_username}%&password=%{@sql_password}%&useSSL=false"
+	execute "CREATE TABLE IF NOT EXISTS br_zones (diameter int primary key, timeshrinking interval default '2:00.0', cooldown interval default '5:00.0');" in {sql}
+	set {_team_colors::*} to get_teamcolors()
+	set {_scoreboard} to get_scoreboard()
+	set_teams({_scoreboard}, {@team_number},{_team_colors::*})
+
+
+
+on join:
+	{game_state} is "LOBBY":
+		send "game not started yet"
+		player has permission "battleroyale.player":
+			br_set_player(player)
+			set player's gamemode to adventure
+		else:
+			br_set_spectator(player)
+	{game_state} is "GAME":
+		br_bossbar_add_player(player)
+		{br_players::*} doesn't contain player
+		{_alive::*} contains player
+		br_set_spectator(player)
+
+
+every second:
+	{game_state} is "GAME":
+		set {_stage} to br_zone_get_stage()
+		set {_world} to world "world"
+		set {_border} to {_world}.getWorldBorder()
+		if {zone} is not br_zone_get_current():
+			set {zone} to br_zone_get_current()
+			
+			br_zone_change_handler({_world}, {zone})
+		br_worldborder_set({_border}, {_stage}, {zone})
+
+		{map_not_given} is set
+		br_gametime() > {@first_map_giveaway_time}
+		br_give_first_map()
+		delete {map_not_given}
+
+
+on death of player:
+	{game_state} is "GAME"
+	br_player_dead_handler(event-entity)
+
+	set {_last_damage_time} to first element of {br_damagetime::%attacked%::*}
+	{_last_damage_time} is set
+	set {_last_attaker} to first element of indexes of {br_damagetime::%attacked%::*} parsed as player
+	loop {br_damagetime::%attacked%::*}:
+		loop-value < {_last_damage_time}
+		set {_last_damage_time} to loop-value
+		set {_last_attaker} to loop-index parsed as player
+	
+	difference between {_last_damage_time} and now < 5 seconds:
+		increase {br_kills::%{_last_attaker}%} by 1
+	loop {br_damage::%player%::*}:
+		send "%loop-index%: %loop-value% DMG" to player
+
+
+on damage of a player:
+	if {game_state} is not "GAME":
+		cancel event
+	else:
+		attacker is a player:
+			add damage to {br_damage::%attacked%::%attacker%}
+			set {br_damagetime::%attacked%::%attacker%} to now
+			# broadcast "Damage from %attacker% to %attacked% at %{br_damagetime::%attacked%::%attacker%}% is %{br_damage::%attacked%::%attacker%}%"
+		else:
+			attacker is mob:
+				add damage to {br_damage::%attacked%::mobs}
+			else:
+				add damage to {br_damage::%attacked%::world}
+
+on player jump:
+	player has permission "battleroyale.player"
+	players's chestplate is elytra
+	set gliding of player to on
+
+
+on drop elytra:
+	cancel event
+
+
+on inventory click at elytra:
+	cancel event
+
+
+on gliding state change:
+	player's y-coordinate is below 100
+	remove_elytra(player)
+
+
+command /alive:
+	description: Возвращает список живых игроков
+	trigger:
+		set {_alive::*} to br_alive_players()
+		broadcast "&eЖивые:"
+		set {_teams::*} to get_teams()
+		loop {_teams::*}:
+			delete {_alive_in_team::*}
+			set {_team_members::*} to get_teammembers(loop-index)
+			loop {_team_members::*}:
+				{_alive::*} contains loop-value-2
+				add loop-value-2 to {_alive_in_team::*}
+			size of {_alive_in_team::*} > 0
+			broadcast "%loop-value%: %{_alive_in_team::*}%"
+
+
+command /setup:
+	trigger:
+		br_bossbar_clear()
+		br_setup_world(player's world, player's location)
+
+
+command /start:
+	trigger:
+		command sender is console:
+			br_start_handler(world "world")
+		else:
+			br_start_handler(the player's world)
+
+
+function br_start_handler(w:world):
+	set {game_state} to "GAME"
+	set {gamestarttime} to now
+	set {map_not_given} to true
+	countdown(10 seconds)
+	br_worldborder_clear({_w})
+	br_bossbar_clear()
+	br_zone_get_list()
+	wait 2 ticks
+	br_zone_set_endtime({gamestarttime})
+	
+	wait 1 tick
+	br_zone_generate_center({_w})
+	br_bossbar_generate()
+	wait 1 tick
+	br_maps_generate({_w}, {@team_number})
+	br_set_players()
+	giveaway_elytra()
+	delete {br_damage::*}
+	delete {br_damagetime::*}
+	delete {br_kills::*}
+
+	set the gamerule doDaylightCycle of {_w} to true
+	set time of {_w} to 10:00
+
+#>
+function br_set_players():
+	delete {br_players::*}
+	clear_teams()
+	loop {@team_number} times:
+		create_team("Team %loop-value%")
+	loop all players:
+		loop-player has permission "battleroyale.player"
+		br_set_player(loop-player)
+	
+
+function br_set_player(p:player):
+	add {_p} to {br_players::*}
+	loop {@team_number} times:
+		{_p} has permission "group.team%loop-value%"
+		set {_team_name} to "team%loop-value%"
+		add_player_to_team({_p}, {_team_name})
+		send "<##00ff00>Вы в команде %loop-value%" to {_p}
+		stop loop
+
+
+function br_set_spectator(p:player):
+	remove {_p} from {br_players::*}
+	set {_p}'s gamemode to spectator
+
+
+function br_give_first_map():
+	loop all players:
+		set {_team} to get_team(loop-player)
+		br_maps_give(loop-player, 1, {_team})	
+
+
+function br_gametime() :: timespan:
+	{game_state} is "GAME"
+	set {_gametime} to difference between now and {gamestarttime}
+	return {_gametime}
+
+
+#> Handler for on player death event
+#> @param p dead player
+function br_player_dead_handler(p:player):
+	set gamemode of {_p} to spectator
+	wait 1 tick
+	set {_alive::*} to br_alive_players()
+	set {_team} to get_team({_p})
+	set {_teammates::*} to get_teammembers({_team})
+
+	loop {_teammates::*}:
+		{_alive::*} contains loop-value
+		set {_team_is_alive} to true
+		exit loop
+
+	if {_alive::*} is set:
+		loop {_alive::*}:
+			loop-value is online
+			set {_team} to get_team(loop-value)
+			{_alive_teams::*} doesn't contain {_team}
+			add {_team} to {_alive_teams::*}
+			set {_alive_teams} to size of {_alive_teams::*}
+	else:
+		set {_alive_teams} to 0
+
+	if {_alive_teams} <= 1:
+		br_game_end()
+	else:
+		{_team_is_alive} is not set
+		set {_total_teams} to {@team_number}
+		set {_points} to ({_total_teams}-{_alive_teams})*20
+		loop {_teammates::*}:
+			add {br_playerpoints::%loop-value%} to {_points}
+		add {_points} to {br_teampoints::%{_team}%}
+		broadcast "Команда %{_team}% выбыла"
+
+	# broadcast "Команд живых %{_alive_teams}%"
+
+
+#> Return list of players who are currently alive
+function br_alive_players() :: players:
+	loop {br_players::*}:
+		loop-value's gamemode is survival
+		add loop-value to {_alive::*}
+	return {_alive::*}
+
+
+#> Game end handler
+function br_game_end():
+	set {game_state} to "GAMEOVER"
+	broadcast "Игра окончена"
+	set {_winners::*} to br_alive_players()
+	set {_winner_team} to get_team(first element of {_winners::*})
+	set the gamerule doDaylightCycle of {_w} to true
+	br_save_results_to_sql()
+
+
+function br_save_results_to_sql():
+	set {_sql_command} to "SELECT * FROM dropper_maps WHERE world = '%{_w}%';"
+	execute unsafe {_sql_command} in {sql}
+
+
+function give_elytra(p:player):
+	set {_p}'s chestplate to elytra
+
+
+function remove_elytra(p:player):
+	remove all elytra from {_p}'s inventory
+
+
+function giveaway_elytra():
+	loop {br_players::*}:
+		give_elytra(loop-value)
+
+
+function clear_elytra(w:world):
+	loop all players:
+		remove_elytra(loop-player)
+	delete all dropped elytra in {_w}
+
+
+function countdown(time:timespan):
+	set {_countdown} to "%{_time}%" parsed as number
+	broadcast {_time}
+	wait 1 tick
+	broadcast "%{_countdown}%"
+	loop "%{_time}%" parsed as number times:
+		remove 1 from {_countdown}
+		wait 1 second
+		broadcast "%{_countdown}%"
+
+#> Create start platform
+function br_create_platform(w:world, spawn:location):
+	set {_y} to 100
+	set {_x1} to (x-coordinate of {_spawn}) - 5
+	set {_x2} to (x-coordinate of {_spawn}) + 5
+	set {_z1} to (z-coordinate of {_spawn}) - 5
+	set {_z2} to (z-coordinate of {_spawn}) + 5
+	set {_loc1} to location at {_x1}, {_y}, {_z1} in {_w}
+	set {_loc2} to location at {_x2}, {_y}, {_z2} in {_w}
+	set blocks within {_loc1} and {_loc2} to glass
+
+
+#> Destroy start platform
+function br_remove_platform(w:world, spawn:location):
+	set {_y} to 100
+	set {_x1} to (x-coordinate of {_spawn}) - 5
+	set {_x2} to (x-coordinate of {_spawn}) + 5
+	set {_z1} to (z-coordinate of {_spawn}) - 5
+	set {_z2} to (z-coordinate of {_spawn}) + 5
+	set {_loc1} to location at {_x1}, {_y}, {_z1} in {_w}
+	set {_loc2} to location at {_x2}, {_y}, {_z2} in {_w}
+	set blocks within {_loc1} and {_loc2} to air
+
+
+#> Set gamerules, spawn location, daytime, weather,
+#> reset worldborder of world
+#> @param w world
+#> @param spawn location of future spawnpoint
+function br_setup_world(w:world, spawn:location):
+	set {game_state} to "LOBBY"
+	broadcast "Setup %{_w}%"
+	set y-coordinate of {_spawn} to 100
+	set {_spawnx} to x-coordinate of {_spawn}
+	set {_spawnz} to z-coordinate of {_spawn}
+	set {border} to {_w}.getWorldBorder()
+	{border}.setCenter({_spawnx}, {_spawnz})
+	br_worldborder_clear({_w})
+	{_w}.setSpawnLocation({_spawn})
+	broadcast "Spawn point is %{_w}.getSpawnLocation()%"
+	{border}.setCenter({_spawnx}, {_spawnz})
+	{border}.setDamageBuffer(1)
+	{border}.setDamageAmount(0.0001)
+	set the gamerule doDaylightCycle of {_w} to false
+	set the gamerule doImmediateRespawn of {_w} to true 
+	set the gamerule doWeatherCycle of {_w} to false
+	set the gamerule announceAdvancements of {_w} to false
+	set the gamerule doEntityDrops of {_w} to true
+	set the gamerule doFireTick of {_w} to true
+	set the gamerule doInsomnia of {_w} to false
+	set the gamerule doLimitedCrafting of {_w} to true
+	set the gamerule doMobLoot of {_w} to true
+	set the gamerule doMobSpawning of {_w} to true
+	set the gamerule doPatrolSpawning of {_w} to true
+	set the gamerule doTileDrops of {_w} to true
+	set the gamerule doTraderSpawning of {_w} to false
+	set the gamerule fallDamage of {_w} to true
+	set the gamerule fireDamage of {_w} to true
+	set the gamerule freezeDamage of {_w} to true
+	set the gamerule keepInventory of {_w} to true
+	set the gamerule mobGriefing of {_w} to true
+	set the gamerule randomTickSpeed of {_w} to 3
+	set the gamerule showDeathMessages of {_w} to true
+	set the gamerule spawnRadius of {_w} to 10
+	set time of {_w} to 10:00
+	set weather of {_w} to clear
+	br_create_platform({_w}, {_spawn})

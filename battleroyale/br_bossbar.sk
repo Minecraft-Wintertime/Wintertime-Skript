@@ -1,0 +1,62 @@
+import:
+	org.bukkit.Bukkit
+	org.bukkit.boss.BarColor
+	org.bukkit.boss.BarStyle
+
+
+#> Remove all br bossbars
+function br_bossbar_clear():
+	loop {zonelist::diameter::*}:
+		{zonelist::bossbar::%loop-index%::1}.setVisible(false)
+		{zonelist::bossbar::%loop-index%::2}.setVisible(false)
+		{zonelist::bossbar::%loop-index%::1}.removeAll()
+		{zonelist::bossbar::%loop-index%::2}.removeAll()
+	delete {zonelist::bossbar::*}
+
+
+#> Generating bossbars for each of zones in {zonelist::diameter::*}
+function br_bossbar_generate():
+	loop {zonelist::diameter::*}:
+		set {zonelist::bossbar::%loop-index%::1} to createBossBar("Зона %loop-index%", "green", 1)
+		set {zonelist::bossbar::%loop-index%::2} to createBossBar("Зона %loop-index% сужается", "red", 0)
+	loop all players:
+		br_bossbar_add_player(loop-player)
+
+
+#> Add bossbar to player
+#> @param p player
+function br_bossbar_add_player(p:player):
+	loop {zonelist::diameter::*}:
+		{zonelist::bossbar::%loop-index%::1}.addPlayer({_p})
+		{zonelist::bossbar::%loop-index%::2}.addPlayer({_p})
+		
+
+#> Update progress of bossbar
+#> @param stage "stable" or "shrinking" zone 
+#> @param zone number of current zone
+#> @param progress number between 0 and 1
+function br_bossbar_update(stage: text, zone:number, progress:number):
+	loop size of {zonelist::diameter::*} times:
+		{zonelist::bossbar::%loop-value%::1}.setVisible(false)
+		{zonelist::bossbar::%loop-value%::2}.setVisible(false)
+	{_stage} is "stable":
+		set {_stage} to "1"
+	{_stage} is "shrinking":
+		set {_stage} to "2"
+	{zonelist::bossbar::%{_zone}%::%{_stage}%}.setVisible(true)
+	{zonelist::bossbar::%{_zone}%::%{_stage}%}.setProgress({_progress})
+	
+
+#> Return new bossbar
+#> @param title title above bossbar
+#> @param color BLUE, GREEN, PINK, PURPLE, RED, WHITE or YELLOW
+#> @param progress number between 0 and 1
+#> @param style SOLID, SEGMENTED_6, SEGMENTED_10, SEGMENTED_12, SEGMENTED_20
+function createBossBar(title: text, color: text = "purple", progress: number = 0, style: text = "solid") :: object:
+	set {_bar-color} to BarColor.valueOf({_color} in upper case)
+	set {_bar-style} to BarStyle.valueOf({_style} in upper case)
+	set {_args::*} to {_title}, {_bar-color} and {_bar-style}
+	set {_bossbar} to Bukkit.createBossBar({_args::*})
+	{_bossbar}.setVisible(false)
+	{_bossbar}.setProgress({_progress})
+	return {_bossbar}

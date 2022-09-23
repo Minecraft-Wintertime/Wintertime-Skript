@@ -1,0 +1,192 @@
+options:
+	sql_ip : "127.0.0.1:5432"
+	sql_db : "minecraft"
+	sql_username : "spleef"
+	sql_password : "spleefpass"
+
+on load:
+	set {sql} to the database "postgresql://%{@sql_ip}%/%{@sql_db}%?user=%{@sql_username}%&password=%{@sql_password}%&useSSL=false"
+	execute "CREATE TABLE IF NOT EXISTS spleef (username VARCHAR PRIMARY KEY);" in {sql}
+	set {world} to world "spleef"
+	enable PvP in {world}
+	set {state} to "pregame"
+	set {spectator.spawn} to location at 0, 70, 0 in {world}
+	set {loc1} to location at 21, 67, 21 in {world}
+	set {loc2} to location at -20, 67, -20 in {world}
+	set {loc3} to location at 21, 58, 21 in {world}
+	set {loc4} to location at -20, 58, -20 in {world}
+
+
+on join:
+	set the player's gamemode to spectator
+	{state} is "game"
+	player has permission "spleef.player"
+	join_player(player)
+	
+
+on quit:
+	{spleef.player::*} contains player
+	leave_player(player)
+		
+
+on projectile hit:
+	{state} is "game"
+	event-block is snow block
+	delete event-block
+	
+
+on break:
+	if {state} is not "game":
+		cancel event
+	else:
+		if event-block is snow block:
+			give 1 snowball to the player
+			cancel drops
+		else:
+			cancel event
+
+
+on damage of a player:
+	event-damagecause is lava:
+		set victim's gamemode to spectator
+		teleport victim to {spectator.spawn}
+	if {state} is not "game":
+		cancel event
+	else:
+		event-damagecause is lava:
+			player_dead_handler(victim)			
+		event-projectile is snowball:
+			set arrow knockback strength of event-projectile to 10
+			cancel event
+
+
+on drop shovel:
+	cancel event
+	
+	
+on craft:
+	cancel event
+
+
+command /joingame [<player>]:
+	trigger:
+		if arg-1 is not set:
+			join_player(player)
+		else:
+			player has permission "group.admin"
+			join_player(arg-1)
+
+
+command /leavegame [<player>]:
+	trigger:
+		if arg-1 is not set:
+			leave_player(player)
+		else:
+			player has permission "group.admin"
+			leave_player(arg-1)
+		
+
+command /reset_players:
+	permission: group.admin
+	trigger:
+		loop all players:
+			leave_player(loop-player)
+
+
+command /stopspleef:
+	permission: group.admin
+	trigger:
+		game_end_handler()
+
+
+command /spleef [<number>]:
+	permission: group.admin
+	trigger:
+		if arg-1 is not set:
+			add 1 to {rnd}
+		else:
+			set {rnd} to arg-1
+		start_game({rnd})
+
+
+command /resetarena:
+	permission: op
+	trigger:
+		reset_arena()
+		
+		
+function reset_arena():
+	set {_layer1::*} to blocks within {loc1} and {loc2}
+	set {_layer2::*} to blocks within {loc3} and {loc4}
+	set {_layer1::*} to snow block
+	set {_layer2::*} to snow block
+
+
+function player_dead_handler(p:player):
+	add {_p} to {spleef.losers::*}
+	set {_teammates::*} to get_teammates({_p})
+	play sound "entity.villager.no" with volume 0.5 to {_teammates::*}
+	loop {spleef.player::*}:
+		{spleef.losers::*} doesn't contain loop-value
+		set {_teammates::*} to get_teammates(loop-value)
+		{_teammates::*} doesn't contain {_p}
+		play sound "entity.experience_orb.pickup" with volume 0.5 to loop-value
+		increase {spleef.score::%loop-value%} by 1
+	check_alive()
+
+
+function check_alive():
+	loop {spleef.player::*}:
+		{spleef.losers::*} doesn't contain loop-index
+		increase {_alive} by 1
+		{_alive_teams::*} doesn't contain get_team({spleef.score::*})
+		add get_team({spleef.score::*}) to {_alive_teams::*}
+	if size of {_alive_teams::*} <= 1:
+		game_end_handler()
+			
+
+function start_game(round:number):
+	set {starttime} to now
+	execute unsafe "ALTER TABLE spleef ADD COLUMN ""%{starttime}%"" INTEGER DEFAULT 0;" in {sql}
+	delete {spleef.losers::*}
+	delete {spleef.score::*}
+	reset_arena()		
+	loop all players:
+		if {spleef.player::*} contain loop-player:
+			add "('%loop-player's name%')" to {_usernames::*}
+			set {spleef.score::%loop-player%} to 0
+			set loop-player's gamemode to survival
+			clear loop-player's inventory
+			give unbreakable golden shovel named "<gold>Сплифинатор" to loop-player
+			apply saturation without particles to loop-player
+		else:
+			set loop-player's gamemode to spectator
+	{_usernames::*} is not empty
+	execute unsafe "INSERT INTO spleef (username) VALUES %join {_usernames::*} with ", "% ON CONFLICT (username) DO NOTHING;" in {sql}
+	send "&aИгра началась" to all players
+	send "Раунд %{_round}%" to all players
+	set {state} to "game"
+	execute console command "/spreadplayers 0 0 5 18 true @a[gamemode=survival]"
+
+
+function game_end_handler():
+	set {state} to "postgame"
+	send "&aИгра окончена" to all players
+	play sound "ui.toast.challenge_complete" with volume 0.5 to all players
+	loop {spleef.score::*}:
+		broadcast "%loop-index% %{spleef.score::%loop-index%}%"
+		add "(""%loop-index%"",%{spleef.score::%loop-index%}%)" to {_str::*}
+	execute unsafe "INSERT INTO spleef (username, ""%{starttime}%"") VALUES %join {_str::*} with ", "% ON CONFLICT (username) DO UPDATE SET ""%{starttime}%""=EXCLUDED.""%{starttime}%"";" in {sql}
+		
+
+function join_player(p : player):
+	{spleef.player::*} doesn't contain {_p}
+	add {_p} to {spleef.player::*}
+	add {_p} to {spleef.losers::*}
+
+
+function leave_player(p : player):
+	{spleef.player::*} contains {_p}
+	remove {_p} from {spleef.player::*}
+	set {_p}'s gamemode to spectator
+	send "&aВы покинули игру" to {_p}

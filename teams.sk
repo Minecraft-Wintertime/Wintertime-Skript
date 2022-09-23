@@ -1,0 +1,233 @@
+# скрипт реализующий распределение игроков по командам
+
+options:
+	delete_empty_teams : false
+
+
+
+	
+
+command /join <text>:
+	trigger:	
+		set {_team_name} to the arg-1
+		if get_teams() contains {_team_name}:
+			if get_teammembers({_team_name}) doesn't contain player's name:
+				add_player_to_team(player, {_team_name})
+				send "&aВы были присоединены к команде %{_team_name}%"
+				send "&bСостав команды: %get_teammembers({_team_name})%"
+				send "&eЧтобы покинуть, введите &f/leaveteam"
+			else:
+				send "&cВы уже играете за команду %{_team_name}%"
+		else:
+			send "&cТакой команды не существует"
+			send "&eЧтобы увидеть список команд, введите &f/teams"	
+			
+import:
+	org.bukkit.Bukkit
+	org.bukkit.scoreboard.Team
+	org.bukkit.scoreboard.Scoreboard
+	org.bukkit.scoreboard.ScoreboardManager	
+	net.kyori.adventure.text.format.NamedTextColor
+
+command /leaveteam <player>:
+	trigger:
+		arg-1 is not set:
+			remove_player_from_team(player)
+		else:
+			remove_player_from_team(arg-1)
+
+
+command /create <text>:	
+	trigger:
+		set {_team_name} to the arg-1
+		if get_teams() doesn't contain {_team_name}:
+			create_team({_team_name})
+			send "&aВы создали команду %{_team_name}%"
+		else:			
+			send "&cКоманда с таким названием уже существует"	
+			send "&bВ ней состоят: %get_teammembers({_team_name})%"
+
+
+command /teams:	
+	trigger:
+		if size of get_teams() is not 0:
+			loop get_teams():
+				send "&bКоманда '%loop-value%'. Участники: %get_teammembers(loop-value)%"
+				
+			if size of {loners::*} is not 0:
+				send "&bИгроки без команды: %{loners::*}%"
+			send "&eВведите /join <team name> чтобы присоединиться к командам"
+			
+		else:
+			send "&cНа данный момент команд не существует"
+			send "&eCоздайте свою команду &f/create <team name>"
+			
+			if size of {loners::*} is not 0:
+				send "&bИгроки без команды: %{loners::*}%"
+			
+	
+command /clear teams:
+	trigger:
+		clear_teams()
+		send "&aСписок команд очищен"
+		send "Игроки без команды: %{loners::*}%"
+
+
+#> Return list of teams		
+function get_teams() :: texts:
+	return {teams::*}
+
+
+#> Return index of team
+#> @param team Name of team (e.g. "Team 1")
+function get_team_index(team:text) :: text:
+	loop {teams::*}:
+		loop-value is {_team}
+		set {_index} to loop-index
+		exit loop
+	return {_index}
+
+
+#> Create new team
+#> @param name Name of team (e.g. "Team 1")
+function create_team(name:text):
+	get_teams() doesn't contain {_name}
+	add {_name} to {teams::*}
+
+
+#> Delete team
+#> @param name Name of team (e.g. "Team 1")
+function remove_team(name:text):
+	{teams::*} contains {_name}
+	loop get_teammembers({_name}):
+		{loners::*} doesn't contain {_p}
+		add {_p} to {loners::*}
+	remove {_name} from {teams::*}
+
+
+#> Delete all teams
+function clear_teams():
+	delete {teams::*}
+	loop all players:
+		{loners::*} do not contain loop-player
+		add loop-player to {loners::*}
+
+
+#> Insert player into team, remove from previous one (if exists)
+#> @param p player
+#> @param team Name of team (e.g. "Team 1")
+function add_player_to_team(p: player, team:text):
+	get_team({_p}) is set:
+		remove_player_from_team({_p})
+	set {_team_index} to get_team_index({_team})
+	add {_p} to {teams::%{_team_index}%::*}
+	set {_scoreboard} to get_scoreboard()
+	set {_scoreboard_team} to {_team} # ВРЕМЕННО
+	add_player_to_scoreboard_team({_p}, {_scoreboard}, {_scoreboard_team})
+	{loners::*} contain {_p}
+	remove {_p} from {loners::*}
+
+
+#> Remove player from team
+#> @param p player
+function remove_player_from_team(p: player):
+	set {_team} to get_team({_p})
+	set {_team_index} to get_team_index({_team})
+	remove {_p} from {teams::%{_team_index}%::*}
+	{loners::*} doesn't contain {_p}
+	add {_p} to {loners::*}
+
+	{@delete_empty_teams} is true
+	size of get_teammembers({_team}) is 0 # если игрок является последним игроком в команде, то удалить команду 
+	remove_team({_team})
+
+
+#> Return team of player or none
+#> @param p player in team
+function get_team(p : player) :: text:
+	loop {teams::*}: # бежим по командам
+		{teams::%loop-index%::*} contains {_p} # проверяем входимость игрока в команду
+		set {_team_name} to loop-index # если входит, то берем название команды
+		exit loop
+	return {_team_name}
+
+
+#> Return list of members of team
+#> @param team team name
+function get_teammembers(team : text) :: players:
+	return {teams::%{_team}%::*}
+
+
+#> Return teammates of player
+#> @param p player in team
+function get_teammates(p : player) :: players:	
+	return get_teammembers(get_team({_p}))
+
+
+#> Return vanila main scoreboard
+function get_scoreboard() :: object:
+	return Bukkit.getScoreboardManager().getMainScoreboard()
+
+
+#> Delete "team1", "team2",... from scoreboard
+#> @param scoreboard vanila scoreboard
+#> @param team_number number of teams
+function clear_scoreboard_teams(scoreboard:object, team_number:number):
+	loop {_team_number} times:
+		set {_team_name} to "team%loop-value%"
+		set {_team} to {_scoreboard}.getTeam({_team_name})
+		{_team} is set
+		{_team}.unregister()
+
+
+#> Add "team1", "team2",... to scoreboard without Friendly Fire
+#> @param scoreboard vanila scoreboard
+#> @param team_number number of teams
+#> @param team_colors list of net.kyori.adventure.text.format.NamedTextColor
+function set_teams(scoreboard:object, team_number:number, team_colors:objects):
+	clear_teams()
+	clear_scoreboard_teams({_scoreboard}, {_team_number})
+	loop {_team_number} times:
+		set {_team_name} to "team%loop-value%"
+		create_team({_team_name})
+
+		set {_scoreboard_team_name} to "team%loop-value%"
+		set {_team} to create_scoreboard_team({_scoreboard},{_scoreboard_team_name})
+		{_team}.setAllowFriendlyFire(false)
+		{_team}.color({_team_colors::%loop-value%})
+
+
+#> Return new scoreboard team
+#> @param scoreboard vanila scoreboard
+#> @param team_name name of team (e.g. "team1")
+function create_scoreboard_team(scoreboard:object, team_name:text) :: object:
+	return {_scoreboard}.registerNewTeam({_team_name})
+
+
+#> Return list of colors, where index is team index
+function get_teamcolors() :: objects:
+	add NamedTextColor.RED to {_team_colors::*}
+	add NamedTextColor.BLUE to {_team_colors::*}
+	add NamedTextColor.AQUA to {_team_colors::*}
+	add NamedTextColor.DARK_PURPLE to {_team_colors::*}
+	add NamedTextColor.GREEN to {_team_colors::*}
+	add NamedTextColor.YELLOW to {_team_colors::*}
+	add NamedTextColor.LIGHT_PURPLE to {_team_colors::*}
+	add NamedTextColor.DARK_GREEN to {_team_colors::*}
+	return {_team_colors::*}
+
+
+#> Insert player into vanila scoreboard team
+#> @param p player
+#> @param scoreboard vanila scoreboard
+#> @param team_name name of scoreboard team, e.g. "team1"
+function add_player_to_scoreboard_team(p:player, scoreboard:object, team_name:text):
+	set {_team} to {_scoreboard}.getTeam({_team_name})
+	{_team}.addEntry({_p}'s name)
+
+#> Remove player from vanila scoreboard team
+#> @param p player
+#> @param scoreboard vanila scoreboard
+function remove_player_from_scoreboard_team(p:player, scoreboard:object):
+	set {_team} to {_scoreboard}.getEntryTeam({_p}'s name)
+	{_team}.removeEntry({_p}'s name)	

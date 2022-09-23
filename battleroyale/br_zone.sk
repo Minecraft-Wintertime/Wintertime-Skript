@@ -1,0 +1,109 @@
+command /zone <text=help> [<number>] [<number=300>] [<number=120>]:
+	trigger:
+		if arg-1 is "add":
+			execute "SELECT diameter FROM br_zones" in {sql} and store the result in {_result::*}
+			if {_result::diameter::*} does not contain arg-2:
+				set {_timeshrinking} to ("%arg-3% seconds" parsed as timespan from (unix date of 0)) formatted as "mm:ss.S"
+				set {_cooldown} to ("%arg-4% seconds" parsed as timespan from (unix date of 0)) formatted as "mm:ss.S"
+				set {_sql_command} to  "INSERT INTO br_zones VALUES (%arg-2%, '%{_timeshrinking}%', '%{_cooldown}%');"
+				execute unsafe {_sql_command} in {sql}
+				send "&aAdded zone with diameter=%arg-2% &ablocks, timeshrinking = %{_timeshrinking}% & and cooldown = %{_cooldown}%"
+			else:
+				send "&cAlready exists!"
+			br_zone_get_list()
+		if arg-1 is "delete":
+			execute "SELECT diameter FROM br_zones" in {sql} and store the result in {_result::*}
+			if {_result::diameter::*} contain arg-2:
+				execute "DELETE FROM br_zones WHERE diameter=%arg-2%;" in {sql}
+				send "&aRemoved zone with diameter=%arg-2% &ablocks" 
+			else:
+				send "&cDoes not exists!"	
+			br_zone_get_list()
+		if arg-1 is "list":
+			send "List of zones:"
+			loop {zonelist::diameter::*}:
+				send "diameter %loop-value%; timeshrinking %{zonelist::timeshrinking::%loop-index%}%; cooldown %{zonelist::cooldown::%loop-index%}%"
+
+
+function br_zone_get_list():
+	delete {zonelist::*}
+	execute "SELECT * FROM br_zones order by diameter desc;" in {sql} and store the result in {zonelist::*}
+	loop {zonelist::diameter::*}:
+		# Преобразования времени которое выводит PostgreSQL в Skript timespan
+		set {_temp} to "%{zonelist::cooldown::%loop-index%}%".replaceAll("^.*days." and "").replaceAll("mins" and "minutes").replaceAll("secs" and "seconds")
+		set {zonelist::cooldown::%loop-index%} to {_temp} parsed as timespan
+		set {_temp} to "%{zonelist::timeshrinking::%loop-index%}%".replaceAll("^.*days." and "").replaceAll("mins" and "minutes").replaceAll("secs" and "seconds")
+		set {zonelist::timeshrinking::%loop-index%} to {_temp} parsed as timespan
+
+
+function br_zone_set_endtime(starttime: date):
+	# Устанавливает в {zonelist::endtime::*} реальную дату окончания соответвующей зоны
+	delete {zonelist::endtime::*}
+	loop {zonelist::diameter::*}:
+		set {_zone_duration} to {zonelist::cooldown::%loop-index%}
+		add {zonelist::timeshrinking::%loop-index%} to {_zone_duration}
+		if loop-index is not "1":
+			set {_endtime} to {zonelist::endtime::%loop-index parsed as number - 1%}
+		else:
+			set {_endtime} to {_starttime}
+		add {_zone_duration} to {_endtime}
+		add {_endtime} to {zonelist::endtime::*}
+		# broadcast {zonelist::endtime::%loop-index%}
+
+
+function br_zone_generate_center(w:world):
+	delete {zonelist::center::x::*}
+	delete {zonelist::center::z::*}
+	set {_spawnx} to x-coordinate of spawn point of {_w}
+	set {_spawnz} to z-coordinate of spawn point of {_w}
+
+	loop {zonelist::diameter::*}:
+		loop-index is not "1"
+		set {_current_diameter} to {zonelist::diameter::%loop-index%}
+		set {_previous_diameter} to {zonelist::diameter::%loop-index parsed as number - 1%}
+		set {_deltaradius} to ({_previous_diameter} - {_current_diameter})/2
+
+		set {_previous_zone_center_x} to {zonelist::center::x::%loop-index parsed as number - 1%}
+		set {_previous_zone_center_z} to {zonelist::center::z::%loop-index parsed as number - 1%}
+
+		set {_offset_x} to random number between 0 - {_deltaradius} and {_deltaradius}
+		set {_offset_z} to random number between 0 - {_deltaradius} and {_deltaradius}
+
+		set {zonelist::center::x::%loop-index%} to {_previous_zone_center_x} + {_offset_x}
+		set {zonelist::center::z::%loop-index%} to {_previous_zone_center_z} + {_offset_z}
+
+	loop {zonelist::diameter::*}:
+		set {zonelist::center::x::%loop-index%} to {zonelist::center::x::%loop-index%} + {_spawnx}
+		set {zonelist::center::z::%loop-index%} to {zonelist::center::z::%loop-index%} + {_spawnz}
+		# broadcast "%loop-index% centerx = %{zonelist::center::x::%loop-index%}%"
+		# broadcast "%loop-index% centerz = %{zonelist::center::z::%loop-index%}%"
+
+
+function br_zone_get_current() :: number:
+	# Возвращает номер зоны в реальном времени
+	loop {zonelist::endtime::*}:
+		loop-value > now:
+			return loop-index parsed as number
+			stop loop
+
+
+function br_zone_get_stage() :: text:
+	set {_current_zone} to br_zone_get_current()
+	set {_previous_zone} to {_current_zone} - 1
+	if {_current_zone} is not 1:
+		set {_abs_zonecooldown} to {zonelist::endtime::%{_previous_zone}%}
+	else:
+		set {_abs_zonecooldown} to {gamestarttime}
+	add {zonelist::cooldown::%{_current_zone}%} to {_abs_zonecooldown}
+	if now < {_abs_zonecooldown}:
+		return "stable"
+	else:
+		return "shrinking"
+
+
+function br_zone_change_handler(w:world, zone:number):
+	br_maps_clear({_w})
+	{_zone} is not 1
+	loop all players:
+		set {_team} to get_team(loop-player)
+		br_maps_give(loop-player, {_zone}, {_team})
