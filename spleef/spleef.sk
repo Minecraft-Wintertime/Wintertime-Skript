@@ -85,7 +85,7 @@ command /leavegame [<player>]:
 			player has permission "group.admin"
 			leave_player(arg-1)
 		
-
+# MUST REWRITED (offline players)
 command /reset_players:
 	permission: group.admin
 	trigger:
