@@ -4,8 +4,8 @@
 
 Данный репозиторий посвящен разработке приватного ивента Minecraft Wintertime (прошлое рабочее название MineCraft Winter BootCamp сокр. MCWBC).
 
-
 ## Содержание
+
 - [Minecraft Wintertime](#minecraft-wintertime)
   - [Содержание](#содержание)
   - [О ивенте](#о-ивенте)
@@ -21,25 +21,35 @@ Wintertime испытал влияние [MCC](https://noxcrew.com/mcc).
 
 Большая часть игровой логики реализована в сценариях [Skript](https://github.com/SkriptLang/Skript)
 
+Площадкой для общения является [Discord сервер](https://discord.gg/ude64dMX6y)
+
+Для автоматизации процесса регистрации участников, адаптирован Discord бот
+
 ## Правила написания Skript
 
 В обязательном порядке все игры должны иметь команды для старта и завершения игры, а также переменную состояния игры (идет в данный момент игра или нет).
 
 Существуют общие скрипты *chat.sk* и *teams.sk* реализующие работу команд и чата.
 
+Для однородности кода следует придерживаться следующих правил:
+
 - Использовать Tab, а не пробел
 - Если весь код попадает под условие, лучше использовать in-line синтаксис. В противном случае писать *if* обязательно. К примеру, вместо:
-    ```
-    if player has permission "admin":
-        message "You're admin!" 
-    ```
-    использовать: 
-    ```
-    player has permission "admin"
-    message "You're admin!"
-    ```
+
+```skript
+if player has permission "admin":
+    message "You're admin!" 
+```
+
+разрешено использовать:
+
+```skript
+player has permission "admin"
+message "You're admin!"
+```
+
 - Скрипт не должен зависеть от конкретной карты, запрещено использовать конкретные координаты в коде
-- Не использовать аддоны кроме [skript-reflect](https://github.com/TPGamesNL/skript-reflect) и [SkBee](https://github.com/ShaneBeee/SkBee)
+- Не использовать аддоны кроме [skript-reflect](https://github.com/TPGamesNL/skript-reflect), [skript-db](https://git.limework.net/Limework/skript-db) и [SkBee](https://github.com/ShaneBeee/SkBee)
 - Для логики команд использовать *teams.sk*
 - Кодировка всех файлов UTF-8
 
